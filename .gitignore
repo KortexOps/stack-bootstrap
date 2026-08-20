@@ -1,0 +1,5 @@
+# Idea
+*.iml
+
+# Sensitive data
+.env
