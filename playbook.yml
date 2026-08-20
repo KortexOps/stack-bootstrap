@@ -5,7 +5,13 @@
     - name: Mettre a jour les paquets
       apt:
         update_cache: yes
+        cache_valid_time: 3600
+        update_cache_retries: 5
+        update_cache_retry_max_delay: 12
+        lock_timeout: 300
         upgrade: dist
+      environment:
+        DEBIAN_FRONTEND: noninteractive
 
     - name: Installer les prerequis
       apt:

@@ -1,5 +1,5 @@
 all:
   hosts:
     vps-ia:
-      ansible_host: VOTRE_IP_VPS
+      ansible_host: 45.147.97.211
       ansible_user: root

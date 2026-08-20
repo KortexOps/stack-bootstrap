@@ -1,5 +1,16 @@
 # Idea
 *.iml
 
-# Sensitive data
+# Donnees sensibles / locales
 .env
+
+# Ansible
+*.retry
+.ansible/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
