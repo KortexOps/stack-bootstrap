@@ -1,0 +1,77 @@
+- name: Read the Headscale domain from the server env
+  shell: "grep '^HEADSCALE_DOMAIN=' /opt/ia-stack/.env | head -n1 | cut -d= -f2- | tr -d '\\r' || true"
+  register: headscale_domain_raw
+  changed_when: false
+  no_log: true
+
+- name: Read the pre-auth key from the server env
+  shell: "grep '^HEADSCALE_AUTHKEY=' /opt/ia-stack/.env | head -n1 | cut -d= -f2- | tr -d '\\r' || true"
+  register: headscale_authkey_raw
+  changed_when: false
+  no_log: true
+
+- name: Warn when the pre-auth key is missing
+  debug:
+    msg: "HEADSCALE_AUTHKEY is missing - the VPS will not join the tailnet. Create a key with: docker exec headscale headscale preauthkeys create --user <ID> --reusable=false (ID comes from: docker exec headscale headscale users list), add it to .env and re-deploy."
+  when: (headscale_authkey_raw.stdout | trim | length) == 0
+
+- name: Install the Tailscale client
+  shell: curl -fsSL https://tailscale.com/install.sh | sh
+  args:
+    creates: /usr/bin/tailscale
+  when: (headscale_authkey_raw.stdout | trim | length) > 0
+
+- name: Enable the Tailscale daemon
+  systemd:
+    name: tailscaled
+    enabled: true
+    state: started
+  when: (headscale_authkey_raw.stdout | trim | length) > 0
+
+- name: Join the tailnet
+  command: tailscale up --login-server=https://{{ headscale_domain_raw.stdout | trim }} --authkey={{ headscale_authkey_raw.stdout | trim }} --hostname={{ headscale_node_hostname }} --accept-dns=true
+  register: tailscale_up
+  until: tailscale_up.rc == 0
+  retries: 5
+  delay: 5
+  when: (headscale_authkey_raw.stdout | trim | length) > 0
+
+- name: Check whether the Tailscale client is installed
+  stat:
+    path: /usr/bin/tailscale
+  register: tailscale_installed
+
+- name: Get the VPS tailnet IP
+  command: tailscale ip -4
+  register: tailscale_ip_raw
+  failed_when: false
+  changed_when: false
+  when: tailscale_installed.stat.exists
+
+- name: Expire the pre-auth key after the VPS joined
+  shell: |
+    KEY="{{ headscale_authkey_raw.stdout | trim }}"
+    PREFIX=$(printf '%s' "$KEY" | sed 's/^hskey-auth-//' | cut -c1-12)
+    ROW=$(docker exec headscale headscale preauthkeys list | grep -F "hskey-auth-${PREFIX}-" | head -n1)
+    ID=$(printf '%s' "$ROW" | awk -F'|' '{ gsub(/[[:space:]]/, "", $1); print $1 }')
+    USED=$(printf '%s' "$ROW" | awk -F'|' '{ gsub(/[[:space:]]/, "", $5); print $5 }')
+    if [ -n "$ID" ] && [ "$USED" = "true" ]; then
+      docker exec headscale headscale preauthkeys expire -i "$ID"
+    fi
+  changed_when: false
+  no_log: true
+  when: (headscale_authkey_raw.stdout | trim | length) > 0
+
+- name: Store the VPS tailnet IP in the server env
+  lineinfile:
+    path: /opt/ia-stack/.env
+    regexp: '^TAILSCALE_IP='
+    line: "TAILSCALE_IP={{ tailscale_ip_raw.stdout_lines[0] }}"
+  register: tailscale_ip_stored
+  when: (tailscale_ip_raw.stdout_lines | default([]) | length) > 0
+
+- name: Restart the stack to bind Traefik to the tailnet IP
+  shell: docker compose up -d
+  args:
+    chdir: /opt/ia-stack
+  when: tailscale_ip_stored.changed | default(false)

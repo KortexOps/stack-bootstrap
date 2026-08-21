@@ -1,0 +1,84 @@
+- name: Check if the PostgreSQL password already exists
+  stat:
+    path: /opt/ia-stack/.postgres_password
+  register: postgres_password_file
+
+- name: Read an existing PostgreSQL password from .env
+  shell: "grep '^POSTGRES_PASSWORD=' /opt/ia-stack/.env | head -n1 | cut -d= -f2- | grep -v '^CHANGE_ME' || true"
+  register: existing_postgres_password
+  changed_when: false
+  when: not postgres_password_file.stat.exists
+  no_log: true
+
+- name: Generate the PostgreSQL password
+  command: openssl rand -base64 32
+  register: generated_postgres_password
+  when:
+    - not postgres_password_file.stat.exists
+    - (existing_postgres_password.stdout | default('') | trim | length) == 0
+  no_log: true
+
+- name: Store the PostgreSQL password
+  copy:
+    content: "{{ (existing_postgres_password.stdout | default(generated_postgres_password.stdout, true)) | trim }}\n"
+    dest: /opt/ia-stack/.postgres_password
+    owner: root
+    group: root
+    mode: '0600'
+  when: not postgres_password_file.stat.exists
+  no_log: true
+
+- name: Read the PostgreSQL password
+  slurp:
+    src: /opt/ia-stack/.postgres_password
+  register: stored_postgres_password
+  no_log: true
+
+- name: Set the PostgreSQL password in .env
+  lineinfile:
+    path: /opt/ia-stack/.env
+    regexp: '^POSTGRES_PASSWORD='
+    line: "POSTGRES_PASSWORD={{ stored_postgres_password.content | b64decode | trim }}"
+    create: true
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+
+- name: Read the Forgejo admin username
+  shell: "grep '^FORGEJO_ADMIN_USERNAME=' /opt/ia-stack/.env | head -n1 | cut -d= -f2- || true"
+  register: forgejo_admin_username_raw
+  changed_when: false
+  no_log: true
+
+- name: Set the Forgejo admin username
+  set_fact:
+    forgejo_admin_username: "{{ forgejo_admin_username_raw.stdout | trim | default('admin', true) }}"
+
+- name: Read the Forgejo admin email
+  shell: "grep '^FORGEJO_ADMIN_EMAIL=' /opt/ia-stack/.env | head -n1 | cut -d= -f2- || true"
+  register: forgejo_admin_email_raw
+  changed_when: false
+  no_log: true
+
+- name: Verify the Forgejo admin email is set
+  assert:
+    that:
+      - (forgejo_admin_email_raw.stdout | trim | length) > 0
+      - "'@' in (forgejo_admin_email_raw.stdout | trim)"
+    fail_msg: "FORGEJO_ADMIN_EMAIL is missing from .env. Add it before deploying."
+
+- name: Generate the Forgejo admin password
+  shell: |
+    if [ ! -s /opt/ia-stack/.forgejo_admin_password ]; then
+      openssl rand -base64 32 > /opt/ia-stack/.forgejo_admin_password
+    fi
+    chmod 600 /opt/ia-stack/.forgejo_admin_password
+  changed_when: false
+  no_log: true
+
+- name: Read the Forgejo admin password
+  slurp:
+    src: /opt/ia-stack/.forgejo_admin_password
+  register: forgejo_admin_password
+  no_log: true

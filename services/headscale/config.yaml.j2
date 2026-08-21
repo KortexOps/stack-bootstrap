@@ -1,0 +1,62 @@
+server_url: https://{{ headscale_domain }}
+listen_addr: 0.0.0.0:8080
+metrics_listen_addr: 127.0.0.1:9090
+
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+
+allocation: sequential
+
+derp:
+  server:
+    enabled: false
+  urls:
+    - https://controlplane.tailscale.com/derpmap/default
+  auto_update_enabled: true
+  update_frequency: 3h
+
+disable_check_updates: false
+
+node:
+  expiry: 0
+  ephemeral:
+    inactivity_timeout: 30m
+
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+    write_ahead_log: true
+    wal_autocheckpoint: 1000
+
+dns:
+  magic_dns: true
+  base_domain: {{ headscale_dns_domain }}
+  override_local_dns: true
+  nameservers:
+    global:
+      - 1.1.1.1
+      - 1.0.0.1
+  search_domains: []
+  extra_records: {{ dns_extra_records | to_json }}
+
+unix_socket: /var/run/headscale/headscale.sock
+unix_socket_permission: "0770"
+
+log:
+  level: info
+  format: text
+
+policy:
+  mode: file
+  path: "{{ '/etc/headscale/policy.hujson' if (tailnet_ip | length) > 0 else '' }}"
+
+logtail:
+  enabled: false
+
+taildrop:
+  enabled: true

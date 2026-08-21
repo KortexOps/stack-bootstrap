@@ -1,0 +1,20 @@
+{
+  "acls": [
+    {
+      "action": "accept",
+      "src": ["*"],
+      "dst": ["{{ tailnet_ip }}:443"]
+    },
+    {
+      "action": "accept",
+      "src": ["*"],
+      "dst": ["{{ tailnet_ip }}:22"]
+    },
+    {
+      "action": "accept",
+      "src": ["*"],
+      "dst": ["*:*"],
+      "proto": "icmp"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+headscale_user: default
+headscale_node_hostname: vps
+ssh_admin_user: deploy
+ssh_disable_root: true

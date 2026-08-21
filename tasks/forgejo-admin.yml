@@ -1,0 +1,36 @@
+- name: Wait for the Forgejo container to be ready
+  command: docker exec -u git forgejo forgejo admin user list
+  register: forgejo_ready
+  until: forgejo_ready.rc == 0
+  retries: 30
+  delay: 3
+  changed_when: false
+
+- name: Read the Forgejo admin username from the server env
+  shell: "grep '^FORGEJO_ADMIN_USERNAME=' /opt/ia-stack/.env | head -n1 | cut -d= -f2- | tr -d '\\r' || true"
+  register: forgejo_admin_username_raw
+  changed_when: false
+  no_log: true
+
+- name: Read the Forgejo admin email from the server env
+  shell: "grep '^FORGEJO_ADMIN_EMAIL=' /opt/ia-stack/.env | head -n1 | cut -d= -f2- | tr -d '\\r' || true"
+  register: forgejo_admin_email_raw
+  changed_when: false
+  no_log: true
+
+- name: Read the Forgejo admin password
+  slurp:
+    src: /opt/ia-stack/.forgejo_admin_password
+  register: forgejo_admin_password
+  no_log: true
+
+- name: Check whether the Forgejo admin user exists
+  shell: "docker exec -u git forgejo forgejo admin user list | grep -qw '{{ forgejo_admin_username_raw.stdout | trim }}'"
+  register: forgejo_admin_exists
+  failed_when: false
+  changed_when: false
+
+- name: Create the Forgejo admin user
+  command: docker exec -u git forgejo forgejo admin user create --username {{ forgejo_admin_username_raw.stdout | trim }} --email {{ forgejo_admin_email_raw.stdout | trim }} --password {{ forgejo_admin_password.content | b64decode | trim }} --admin --must-change-password=false
+  no_log: true
+  when: forgejo_admin_exists.rc != 0

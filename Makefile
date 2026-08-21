@@ -3,6 +3,8 @@
 ANSIBLE_IMAGE ?= my-ansible
 INVENTORY     := inventory.yml
 PLAYBOOK      := playbook.yml
+ANSIBLE_ARGS  ?=
+SSH_PRIVATE_KEY ?= ~/.ssh/id_ed25519
 
 .DEFAULT_GOAL := help
 
@@ -13,13 +15,14 @@ build:
 
 deploy: build
 	docker run --rm -it \
-		-v "$$(pwd)":/ansible \
-		-v ~/.ssh:/root/.ssh:ro \
-		$(ANSIBLE_IMAGE) -i $(INVENTORY) $(PLAYBOOK)
+		-e PUBLIC_IP=$(PUBLIC_IP) \
+		-v "$(CURDIR)":/ansible \
+		-v $(SSH_PRIVATE_KEY):/root/.ssh/id_ed25519:ro \
+		$(ANSIBLE_IMAGE) -i $(INVENTORY) $(PLAYBOOK) $(ANSIBLE_ARGS)
 
 check: build
 	docker run --rm \
-		-v "$$(pwd)":/ansible \
+		-v "$(CURDIR)":/ansible \
 		$(ANSIBLE_IMAGE) -i $(INVENTORY) $(PLAYBOOK) --syntax-check
 
 help:

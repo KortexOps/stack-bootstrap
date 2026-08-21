@@ -1,0 +1,129 @@
+- name: Create the SSH admin user
+  user:
+    name: "{{ ssh_admin_user }}"
+    shell: /bin/bash
+    groups: sudo
+    append: true
+    create_home: true
+
+- name: Create the SSH directory for the admin user
+  file:
+    path: /home/{{ ssh_admin_user }}/.ssh
+    state: directory
+    owner: "{{ ssh_admin_user }}"
+    group: "{{ ssh_admin_user }}"
+    mode: '0700'
+
+- name: Copy the root SSH key to the admin user
+  copy:
+    src: /root/.ssh/authorized_keys
+    dest: /home/{{ ssh_admin_user }}/.ssh/authorized_keys
+    owner: "{{ ssh_admin_user }}"
+    group: "{{ ssh_admin_user }}"
+    mode: '0600'
+    remote_src: true
+  failed_when: false
+
+- name: Grant passwordless sudo to the admin user
+  copy:
+    content: "{{ ssh_admin_user }} ALL=(ALL) NOPASSWD:ALL\n"
+    dest: /etc/sudoers.d/{{ ssh_admin_user }}
+    owner: root
+    group: root
+    mode: '0440'
+    validate: "visudo -cf %s"
+
+- name: Check for an SSH key on the admin user
+  shell: grep -c '^ssh-' /home/{{ ssh_admin_user }}/.ssh/authorized_keys
+  register: admin_keys
+  failed_when: false
+  changed_when: false
+
+- name: Abort when disabling root SSH without an admin key
+  assert:
+    that:
+      - admin_keys.rc == 0
+      - (admin_keys.stdout | int) > 0
+    fail_msg: "ssh_disable_root is true but {{ ssh_admin_user }} has no SSH key - aborting to avoid locking yourself out."
+  when: ssh_disable_root
+
+- name: Allow Docker to manage forwarding rules
+  lineinfile:
+    path: /etc/default/ufw
+    regexp: '^DEFAULT_FORWARD_POLICY='
+    line: 'DEFAULT_FORWARD_POLICY="ACCEPT"'
+
+- name: Allow SSH through the firewall
+  ufw:
+    rule: allow
+    port: 22
+    proto: tcp
+
+- name: Allow HTTP and HTTPS through the firewall
+  ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop:
+    - 80
+    - 443
+
+- name: Allow direct Tailscale traffic through the firewall
+  ufw:
+    rule: allow
+    port: 41641
+    proto: udp
+
+- name: Allow all traffic on the Tailscale interface
+  ufw:
+    rule: allow
+    interface: tailscale0
+    direction: in
+  failed_when: false
+
+- name: Set the firewall default policy for incoming traffic
+  ufw:
+    direction: incoming
+    policy: deny
+
+- name: Enable the firewall
+  ufw:
+    state: enabled
+
+- name: Enable strict reverse path filtering
+  sysctl:
+    name: "{{ item }}"
+    value: '1'
+    sysctl_set: true
+    reload: true
+  loop:
+    - net.ipv4.conf.all.rp_filter
+    - net.ipv4.conf.default.rp_filter
+
+- name: Configure SSH for key-only authentication
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "^{{ item.key }}[[:space:]]"
+    line: "{{ item.key }} {{ item.value }}"
+  loop:
+    - key: PasswordAuthentication
+      value: "no"
+    - key: PermitRootLogin
+      value: "{{ 'prohibit-password' if not ssh_disable_root else 'no' }}"
+  when: admin_keys.rc == 0 and (admin_keys.stdout | int) > 0
+
+- name: Validate the SSH configuration
+  command: sshd -t
+  changed_when: false
+  when: admin_keys.rc == 0 and (admin_keys.stdout | int) > 0
+
+- name: Restart the SSH service
+  service:
+    name: ssh
+    state: restarted
+  when: admin_keys.rc == 0 and (admin_keys.stdout | int) > 0
+
+- name: Warn when no SSH key is available
+  debug:
+    msg: "No SSH key found for {{ ssh_admin_user }} - skipping SSH hardening to avoid locking yourself out."
+  when: admin_keys.rc != 0 or (admin_keys.stdout | int) == 0

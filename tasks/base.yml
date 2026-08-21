@@ -1,0 +1,57 @@
+- name: Update system packages
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+    update_cache_retries: 5
+    update_cache_retry_max_delay: 12
+    lock_timeout: 300
+    upgrade: dist
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Install prerequisites
+  apt:
+    name:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - git
+      - gnupg
+      - iproute2
+      - lsb-release
+      - openssl
+    state: present
+
+- name: Install Docker
+  shell: curl -fsSL https://get.docker.com | sh
+  args:
+    creates: /usr/bin/docker
+
+- name: Create destination directory
+  file:
+    path: /opt/ia-stack
+    state: directory
+    mode: '0755'
+
+- name: Copy docker-compose stack
+  copy:
+    src: docker-compose.yml
+    dest: /opt/ia-stack/docker-compose.yml
+
+- name: Copy .env file
+  copy:
+    src: .env
+    dest: /opt/ia-stack/.env
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Set VPS public address in .env
+  lineinfile:
+    path: /opt/ia-stack/.env
+    regexp: '^PUBLIC_IP='
+    line: "PUBLIC_IP={{ ansible_host | default(ansible_default_ipv4.address) }}"
+    create: true
+    owner: root
+    group: root
+    mode: '0600'

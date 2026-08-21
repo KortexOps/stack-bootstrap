@@ -1,0 +1,71 @@
+- name: Read the Headscale domain from the server env
+  shell: "grep '^HEADSCALE_DOMAIN=' /opt/ia-stack/.env | head -n1 | cut -d= -f2- | tr -d '\\r' || true"
+  register: headscale_domain_raw
+  changed_when: false
+  no_log: true
+
+- name: Read the Forgejo domain from the server env
+  shell: "grep '^FORGEJO_DOMAIN=' /opt/ia-stack/.env | head -n1 | cut -d= -f2- | tr -d '\\r' || true"
+  register: forgejo_domain_raw
+  changed_when: false
+  no_log: true
+
+- name: Read the tailnet IP from the server env
+  shell: "grep '^TAILSCALE_IP=' /opt/ia-stack/.env | head -n1 | cut -d= -f2- | tr -d '\\r' || true"
+  register: tailscale_ip_raw
+  changed_when: false
+
+- name: Read the live tailnet IP
+  command: tailscale ip -4
+  register: tailscale_ip_live
+  failed_when: false
+  changed_when: false
+  when: (tailscale_ip_raw.stdout | trim | length) == 0
+
+- name: Determine the tailnet IP
+  set_fact:
+    tailnet_ip: "{{ tailscale_ip_raw.stdout | trim if (tailscale_ip_raw.stdout | trim | length) > 0 else (tailscale_ip_live.stdout_lines | default([]) | first | default('', true)) }}"
+
+- name: Verify HEADSCALE_DOMAIN is set
+  assert:
+    that:
+      - (headscale_domain_raw.stdout | trim | length) > 0
+    fail_msg: "HEADSCALE_DOMAIN is missing from .env (e.g. headscale.jortexops.duckdns.org). Add it before deploying."
+
+- name: Create the headscale configuration directory
+  file:
+    path: /opt/ia-stack/headscale
+    state: directory
+    mode: '0755'
+
+- name: Copy the headscale configuration
+  template:
+    src: services/headscale/config.yaml.j2
+    dest: /opt/ia-stack/headscale/config.yaml
+    mode: '0644'
+  register: headscale_config
+  vars:
+    headscale_domain: "{{ headscale_domain_raw.stdout | trim }}"
+    forgejo_domain: "{{ forgejo_domain_raw.stdout | trim }}"
+    tailnet_ip: "{{ tailnet_ip }}"
+    dns_extra_records: "{{ [{'name': forgejo_domain, 'type': 'A', 'value': tailnet_ip}] if (forgejo_domain | length > 0 and tailnet_ip | length > 0) else [] }}"
+
+- name: Copy the Headscale ACL policy
+  template:
+    src: services/headscale/policy.hujson.j2
+    dest: /opt/ia-stack/headscale/policy.hujson
+    mode: '0644'
+  register: headscale_policy
+  vars:
+    tailnet_ip: "{{ tailnet_ip }}"
+  when: (tailnet_ip | length) > 0
+
+- name: Validate the Headscale ACL policy
+  command: docker exec headscale headscale policy check --file /etc/headscale/policy.hujson
+  when:
+    - (tailnet_ip | length) > 0
+    - headscale_policy.changed | default(false)
+
+- name: Restart Headscale to apply the DNS records and the ACL policy
+  command: docker restart headscale
+  when: (headscale_config.changed or headscale_policy.changed | default(false)) and (tailnet_ip | length) > 0

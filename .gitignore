@@ -3,6 +3,7 @@
 
 # Donnees sensibles / locales
 .env
+*.log
 
 # Ansible
 *.retry

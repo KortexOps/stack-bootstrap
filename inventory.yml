@@ -1,5 +1,6 @@
 all:
   hosts:
     vps-ia:
-      ansible_host: 45.147.97.211
-      ansible_user: root
+      ansible_host: "{{ lookup('env', 'PUBLIC_IP') }}"
+      ansible_user: deploy
+      ansible_python_interpreter: /usr/bin/python3

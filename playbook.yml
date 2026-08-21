@@ -1,212 +1,37 @@
-- name: Deploiement Stack Serveur
-  hosts: all
+- name: Server Stack Deployment
+  hosts: vps-ia
   become: true
+  gather_facts: true
+
   tasks:
-    - name: Mettre a jour les paquets
-      apt:
-        update_cache: yes
-        cache_valid_time: 3600
-        update_cache_retries: 5
-        update_cache_retry_max_delay: 12
-        lock_timeout: 300
-        upgrade: dist
-      environment:
-        DEBIAN_FRONTEND: noninteractive
+    - name: Base system setup
+      include_tasks: tasks/base.yml
+      tags: ['base']
 
-    - name: Installer les prerequis
-      apt:
-        name: [ca-certificates, curl, gnupg, git, openssl]
-        state: present
+    - name: Headscale configuration
+      include_tasks: tasks/headscale.yml
+      tags: ['headscale']
 
-    - name: Installer Docker
-      shell: curl -fsSL https://get.docker.com | sh
-      args:
-        creates: /usr/bin/docker
+    - name: Forgejo configuration
+      include_tasks: tasks/forgejo.yml
+      tags: ['forgejo']
 
-    - name: Creer le repertoire de destination
-      file:
-        path: /opt/ia-stack
-        state: directory
-        mode: '0755'
+    - name: Start the stack
+      include_tasks: tasks/stack.yml
+      tags: ['stack']
 
-    - name: Copier la stack docker-compose
-      copy:
-        src: files/docker-compose.yml
-        dest: /opt/ia-stack/docker-compose.yml
+    - name: Tailscale node setup
+      include_tasks: tasks/tailscale.yml
+      tags: ['tailscale']
 
-    - name: Copier le fichier .env
-      copy:
-        src: .env
-        dest: /opt/ia-stack/.env
-        owner: root
-        group: root
-        mode: '0600'
+    - name: Re-render Headscale config after the VPS joined the tailnet
+      include_tasks: tasks/headscale.yml
+      tags: ['headscale']
 
-    - name: Vérifier si le mot de passe PostgreSQL existe déjà
-      stat:
-        path: /opt/ia-stack/.postgres_password
-      register: postgres_password_file
+    - name: Forgejo administrator
+      include_tasks: tasks/forgejo-admin.yml
+      tags: ['forgejo-admin']
 
-    - name: Lire un éventuel mot de passe PostgreSQL existant dans .env
-      shell: "grep '^POSTGRES_PASSWORD=' /opt/ia-stack/.env | head -n1 | cut -d= -f2- | grep -v '^CHANGE_ME' || true"
-      register: existing_postgres_password
-      changed_when: false
-      when: not postgres_password_file.stat.exists
-      no_log: true
-
-    - name: Générer le mot de passe PostgreSQL
-      command: openssl rand -base64 32
-      register: generated_postgres_password
-      when:
-        - not postgres_password_file.stat.exists
-        - (existing_postgres_password.stdout | default('') | trim | length) == 0
-      no_log: true
-
-    - name: Stocker le mot de passe PostgreSQL
-      copy:
-        content: "{{ (existing_postgres_password.stdout | default(generated_postgres_password.stdout, true)) | trim }}\n"
-        dest: /opt/ia-stack/.postgres_password
-        owner: root
-        group: root
-        mode: '0600'
-      when: not postgres_password_file.stat.exists
-      no_log: true
-
-    - name: Lire le mot de passe PostgreSQL
-      slurp:
-        src: /opt/ia-stack/.postgres_password
-      register: stored_postgres_password
-      no_log: true
-
-    - name: Configurer le mot de passe PostgreSQL dans .env
-      lineinfile:
-        path: /opt/ia-stack/.env
-        regexp: '^POSTGRES_PASSWORD='
-        line: "POSTGRES_PASSWORD={{ stored_postgres_password.content | b64decode | trim }}"
-        create: true
-        owner: root
-        group: root
-        mode: '0600'
-      no_log: true
-
-    - name: Lire le nom du compte administrateur Forgejo
-      shell: "grep '^FORGEJO_ADMIN_USERNAME=' /opt/ia-stack/.env | head -n1 | cut -d= -f2- || true"
-      register: forgejo_admin_username_raw
-      changed_when: false
-      no_log: true
-
-    - name: Définir le nom du compte administrateur Forgejo
-      set_fact:
-        forgejo_admin_username: "{{ forgejo_admin_username_raw.stdout | trim | default('admin', true) }}"
-
-    - name: Lire l’adresse e-mail administrateur Forgejo
-      shell: "grep '^FORGEJO_ADMIN_EMAIL=' /opt/ia-stack/.env | head -n1 | cut -d= -f2- || true"
-      register: forgejo_admin_email_raw
-      changed_when: false
-      no_log: true
-
-    - name: Vérifier que l’adresse e-mail administrateur est configurée
-      assert:
-        that:
-          - (forgejo_admin_email_raw.stdout | trim | length) > 0
-          - "'@' in (forgejo_admin_email_raw.stdout | trim)"
-        fail_msg: "Ajoute FORGEJO_ADMIN_EMAIL dans le fichier .env avant de lancer le déploiement."
-
-    - name: Générer le mot de passe administrateur Forgejo
-      shell: |
-        if [ ! -s /opt/ia-stack/.forgejo_admin_password ]; then
-          openssl rand -base64 32 > /opt/ia-stack/.forgejo_admin_password
-        fi
-        chmod 600 /opt/ia-stack/.forgejo_admin_password
-      changed_when: false
-      no_log: true
-
-    - name: Lire le mot de passe administrateur Forgejo
-      slurp:
-        src: /opt/ia-stack/.forgejo_admin_password
-      register: forgejo_admin_password
-      no_log: true
-
-    - name: Lancer les conteneurs
-      command: docker compose up -d
-      args:
-        chdir: /opt/ia-stack
-
-    - name: Attendre que Forgejo soit prêt
-      command:
-        argv:
-          - docker
-          - exec
-          - --user
-          - 1000:1000
-          - forgejo
-          - forgejo
-          - --config
-          - /data/gitea/conf/app.ini
-          - --work-path
-          - /data/gitea
-          - admin
-          - user
-          - list
-          - --admin
-      register: forgejo_admin_list
-      retries: 30
-      delay: 5
-      until: forgejo_admin_list.rc == 0
-      changed_when: false
-      no_log: true
-
-    - name: Lister les comptes Forgejo
-      command:
-        argv:
-          - docker
-          - exec
-          - --user
-          - 1000:1000
-          - forgejo
-          - forgejo
-          - --config
-          - /data/gitea/conf/app.ini
-          - --work-path
-          - /data/gitea
-          - admin
-          - user
-          - list
-      register: forgejo_user_list
-      changed_when: false
-      no_log: true
-
-    - name: Refuser un compte existant non administrateur
-      assert:
-        that:
-          - forgejo_admin_username not in forgejo_user_list.stdout or forgejo_admin_username in forgejo_admin_list.stdout
-        fail_msg: "Le compte Forgejo '{{ forgejo_admin_username }}' existe déjà mais n’est pas administrateur. Utilise un autre FORGEJO_ADMIN_USERNAME ou élève ce compte depuis Forgejo."
-
-    - name: Créer le compte administrateur Forgejo
-      command:
-        argv:
-          - docker
-          - exec
-          - --user
-          - 1000:1000
-          - forgejo
-          - forgejo
-          - --config
-          - /data/gitea/conf/app.ini
-          - --work-path
-          - /data/gitea
-          - admin
-          - user
-          - create
-          - --username
-          - "{{ forgejo_admin_username }}"
-          - --password
-          - "{{ forgejo_admin_password.content | b64decode | trim }}"
-          - --email
-          - "{{ forgejo_admin_email_raw.stdout | trim }}"
-          - --admin
-          - --must-change-password=false
-      when:
-        - forgejo_admin_username not in forgejo_admin_list.stdout
-        - forgejo_admin_username not in forgejo_user_list.stdout
-      no_log: true
+    - name: Server hardening
+      include_tasks: tasks/hardening.yml
+      tags: ['hardening']

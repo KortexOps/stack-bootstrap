@@ -1,0 +1,18 @@
+- name: Start the Docker stack
+  shell: docker compose up -d
+  args:
+    chdir: /opt/ia-stack
+
+- name: Wait for the Headscale container to be ready
+  command: docker exec headscale headscale version
+  register: headscale_version
+  until: headscale_version.rc == 0
+  retries: 30
+  delay: 2
+  changed_when: false
+
+- name: Create the Headscale user
+  command: docker exec headscale headscale users create {{ headscale_user }}
+  register: headscale_user_create
+  failed_when: false
+  changed_when: "'created' in (headscale_user_create.stdout | lower)"
