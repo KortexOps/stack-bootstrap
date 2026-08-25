@@ -51,9 +51,18 @@ log:
   level: info
   format: text
 
+{% if tailnet_ip | length > 0 %}
+# Once the VPS has joined the tailnet, enforce the deny-by-default ACL policy
+# from a file. `policy` must stay at the ROOT level (no indentation) — inside
+# `log:` it would be silently ignored and the tailnet would not be protected.
 policy:
   mode: file
-  path: "{{ '/etc/headscale/policy.hujson' if (tailnet_ip | length) > 0 else '' }}"
+  path: /etc/headscale/policy.hujson
+{% else %}
+# Headscale uses its default policy backend until the VPS has joined the tailnet.
+policy:
+  mode: database
+{% endif %}
 
 logtail:
   enabled: false

@@ -1,6 +1,10 @@
 .git
 .env
+ansible.log
 *.iml
 __pycache__/
 *.pyc
+*.log
+reports/
+.venv/
 .DS_Store

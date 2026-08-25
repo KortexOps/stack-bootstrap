@@ -3,6 +3,18 @@
   become: true
   gather_facts: true
 
+  pre_tasks:
+    - name: Validate controller and connection variables
+      assert:
+        that:
+          - ansible_host is defined
+          - (ansible_host | string | trim | length) > 0
+          - "'YOUR_' not in (ansible_host | string)"
+          - ansible_user is defined
+          - (ansible_user | string | trim | length) > 0
+          - ssh_admin_user is match('^[a-z_][a-z0-9_-]*$')
+        fail_msg: "PUBLIC_IP, ANSIBLE_USER and a valid ssh_admin_user are required."
+
   tasks:
     - name: Base system setup
       include_tasks: tasks/base.yml
@@ -35,3 +47,7 @@
     - name: Server hardening
       include_tasks: tasks/hardening.yml
       tags: ['hardening']
+
+    - name: Backup tooling (rclone + backup script)
+      include_tasks: tasks/backup.yml
+      tags: ['backup']

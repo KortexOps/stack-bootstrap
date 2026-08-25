@@ -1,0 +1,54 @@
+# Prod deployment — triggered on push to main (post-merge).
+# Same pattern: variables here, secrets in CI.
+
+name: Deploy Prod
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy-prod:
+    runs-on: self-hosted-vps
+    concurrency:
+      group: prod-deploy
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Ansible image
+        run: docker build --pull -t my-ansible .
+
+      - name: Deploy prod stack
+        env:
+          PUBLIC_IP: ${{ secrets.PUBLIC_IP }}
+        run: |
+          cat > .env << 'ENVEOF'
+          ACME_EMAIL=${{ secrets.ACME_EMAIL }}
+          FORGEJO_DOMAIN=git-${{ secrets.BASE_DOMAIN }}
+          HEADSCALE_DOMAIN=headscale-${{ secrets.BASE_DOMAIN }}
+          HEADSCALE_DNS_DOMAIN=tailnet-${{ secrets.BASE_DOMAIN }}
+          FORGEJO_ADMIN_USERNAME=forgejo-admin
+          FORGEJO_ADMIN_EMAIL=${{ secrets.FORGEJO_ADMIN_EMAIL }}
+          POSTGRES_DB=forgejo
+          POSTGRES_USER=forgejo
+          COMPOSE_PROJECT_NAME=ia-stack
+          RCLONE_REMOTE=gdrive:forgejo-backups
+          BACKUP_RETENTION_DAYS=14
+          RCLONE_CONFIG_TOKEN=${{ secrets.RCLONE_CONFIG_TOKEN }}
+          ANSIBLE_IMAGE=my-ansible
+          ANSIBLE_USER=deploy
+          ENVEOF
+
+          docker run --rm \
+            -v "$(pwd):/ansible" \
+            -v "$HOME/.ssh:/root/.ssh:ro" \
+            --env-file .env \
+            -e PUBLIC_IP="$PUBLIC_IP" \
+            -e ANSIBLE_USER=deploy \
+            my-ansible \
+            -i inventory-prod.yml playbook.yml \
+            --tags all

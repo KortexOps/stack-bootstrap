@@ -1,0 +1,175 @@
+# ─── Traefik port bindings ───────────────────────────────────────────────────
+# Override per environment so dev never binds to the public IP.
+#   Prod:  <PUBLIC_IP>:80:80,  <PUBLIC_IP>:443:443,         <TAILSCALE_IP>:443:8443
+# Docker Compose requires the =default syntax on each variable independently.
+#
+# Container and network names are namespaced by COMPOSE_PROJECT_NAME (set by
+# Ansible from compose_project_name), so prod and dev can coexist on the same
+# VPS without Docker name conflicts.
+#
+# Dev (use_shared_proxy: true) runs NO Traefik and NO Headscale of its own:
+# its services join the prod proxy network and register on the prod Traefik,
+# which issues the Let's Encrypt certs (HTTP-01 on public :80) and serves dev
+# only on the tailnet entrypoint (web-internal) — same privacy model as prod.
+# Router/service names are prefixed with traefik_router_prefix so dev routers
+# never collide with prod routers on the shared Traefik.
+
+services:
+{% if not use_shared_proxy %}
+  traefik:
+    image: ${TRAEFIK_IMAGE:-traefik:v3.7.11}
+    container_name: {{ traefik_container_name }}
+    restart: unless-stopped
+    command:
+      - "--api.dashboard=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web-internal.address=:8443"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "${TRAEFIK_BIND_HTTP:-${PUBLIC_IP}:80:80}"
+      - "${TRAEFIK_BIND_HTTPS:-${PUBLIC_IP}:443:443}"
+      - "${TRAEFIK_BIND_TAILNET:-${TAILSCALE_IP:-127.0.0.1}:443:8443}"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "traefik-letsencrypt:/letsencrypt"
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - proxy
+{% endif %}
+{% if headscale_enabled %}
+  headscale:
+    image: ${HEADSCALE_IMAGE:-headscale/headscale:0.29.3}
+    container_name: {{ headscale_container_name }}
+    restart: unless-stopped
+    command: serve
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+    read_only: true
+    tmpfs:
+      - /var/run/headscale
+    volumes:
+      - "./headscale:/etc/headscale:ro"
+      - "./headscale/data:/var/lib/headscale"
+    networks:
+      - proxy
+    healthcheck:
+      test: ["CMD", "headscale", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network={{ proxy_network_name }}"
+      - "traefik.http.routers.{{ traefik_router_prefix }}-headscale.rule=Host(`${HEADSCALE_DOMAIN}`)"
+      - "traefik.http.routers.{{ traefik_router_prefix }}-headscale.entrypoints=websecure"
+      - "traefik.http.routers.{{ traefik_router_prefix }}-headscale.tls=true"
+      - "traefik.http.routers.{{ traefik_router_prefix }}-headscale.tls.certresolver=letsencrypt"
+      - "traefik.http.services.{{ traefik_router_prefix }}-headscale.loadbalancer.server.port=8080"
+{% endif %}
+  db:
+    image: ${POSTGRES_IMAGE:-postgres:16.4}
+    container_name: {{ forgejo_db_container_name }}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - "postgres-data:/var/lib/postgresql/data"
+    networks:
+      - backend
+
+  forgejo:
+    image: ${FORGEJO_IMAGE:-codeberg.org/forgejo/forgejo:10.0.0}
+    container_name: {{ forgejo_container_name }}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - FORGEJO__database__DB_TYPE=postgres
+      - FORGEJO__database__HOST=db:5432
+      - FORGEJO__database__NAME=${POSTGRES_DB}
+      - FORGEJO__database__USER=${POSTGRES_USER}
+      - FORGEJO__database__PASSWD=${POSTGRES_PASSWORD}
+      - FORGEJO__server__DOMAIN=${FORGEJO_DOMAIN}
+      - FORGEJO__server__ROOT_URL=https://${FORGEJO_DOMAIN}/
+      - FORGEJO__server__HTTP_PORT=3000
+      - FORGEJO__security__INSTALL_LOCK=true
+      # Force Actions on: a restored app.ini could have disabled it, and the
+      # runner pings /api/actions/... which 404s when Actions is off.
+      - FORGEJO__actions__ENABLED=true
+      - FORGEJO__actions__DEFAULT_ACTIONS_URL=https://data.forgejo.org
+    volumes:
+      - "forgejo-data:/data"
+      - "/etc/timezone:/etc/timezone:ro"
+      - "/etc/localtime:/etc/localtime:ro"
+    networks:
+      - proxy
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/api/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network={{ proxy_network_name }}"
+      - "traefik.http.routers.{{ traefik_router_prefix }}-forgejo.rule=Host(`${FORGEJO_DOMAIN}`)"
+      - "traefik.http.routers.{{ traefik_router_prefix }}-forgejo.entrypoints=web-internal"
+      - "traefik.http.routers.{{ traefik_router_prefix }}-forgejo.tls=true"
+      - "traefik.http.routers.{{ traefik_router_prefix }}-forgejo.tls.certresolver=letsencrypt"
+      - "traefik.http.services.{{ traefik_router_prefix }}-forgejo.loadbalancer.server.port=3000"
+
+networks:
+  proxy:
+    name: {{ proxy_network_name }}
+{% if use_shared_proxy %}
+    external: true
+{% endif %}
+  backend:
+    name: {{ backend_network_name }}
+
+volumes:
+  postgres-data:
+  traefik-letsencrypt:
+  forgejo-data:

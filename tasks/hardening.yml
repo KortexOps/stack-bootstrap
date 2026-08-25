@@ -14,6 +14,11 @@
     group: "{{ ssh_admin_user }}"
     mode: '0700'
 
+- name: Check for the root SSH authorized keys file
+  stat:
+    path: /root/.ssh/authorized_keys
+  register: root_authorized_keys
+
 - name: Copy the root SSH key to the admin user
   copy:
     src: /root/.ssh/authorized_keys
@@ -22,7 +27,7 @@
     group: "{{ ssh_admin_user }}"
     mode: '0600'
     remote_src: true
-  failed_when: false
+  when: root_authorized_keys.stat.exists
 
 - name: Grant passwordless sudo to the admin user
   copy:
@@ -34,7 +39,9 @@
     validate: "visudo -cf %s"
 
 - name: Check for an SSH key on the admin user
-  shell: grep -c '^ssh-' /home/{{ ssh_admin_user }}/.ssh/authorized_keys
+  shell: >-
+    awk '$1 ~ /^(ssh|ecdsa|sk-)/ { count++ } END { print count + 0 }'
+    /home/{{ ssh_admin_user }}/.ssh/authorized_keys
   register: admin_keys
   failed_when: false
   changed_when: false
@@ -74,12 +81,29 @@
     port: 41641
     proto: udp
 
-- name: Allow all traffic on the Tailscale interface
+- name: Check whether the Tailscale interface exists
+  command: ip link show tailscale0
+  register: tailscale_interface
+  changed_when: false
+  failed_when: false
+
+- name: Allow HTTPS to the private Traefik entrypoint on Tailscale
   ufw:
     rule: allow
     interface: tailscale0
     direction: in
-  failed_when: false
+    port: 443
+    proto: tcp
+  when: tailscale_interface.rc == 0
+
+- name: Allow SSH on the Tailscale interface
+  ufw:
+    rule: allow
+    interface: tailscale0
+    direction: in
+    port: 22
+    proto: tcp
+  when: tailscale_interface.rc == 0
 
 - name: Set the firewall default policy for incoming traffic
   ufw:
@@ -100,17 +124,47 @@
     - net.ipv4.conf.all.rp_filter
     - net.ipv4.conf.default.rp_filter
 
-- name: Configure SSH for key-only authentication
-  lineinfile:
-    path: /etc/ssh/sshd_config
-    regexp: "^{{ item.key }}[[:space:]]"
-    line: "{{ item.key }} {{ item.value }}"
-  loop:
-    - key: PasswordAuthentication
-      value: "no"
-    - key: PermitRootLogin
-      value: "{{ 'prohibit-password' if not ssh_disable_root else 'no' }}"
+- name: Write the hardened SSH drop-in (applied first)
+  copy:
+    content: |
+      # JortexOps — do not edit by hand.
+      # This file is loaded early (prefix 00-) so it wins over cloud-init and
+      # other drop-ins that may set more permissive values.
+      PasswordAuthentication no
+      PermitRootLogin {{ 'prohibit-password' if not ssh_disable_root else 'no' }}
+    dest: /etc/ssh/sshd_config.d/00-ia-stack-hardening.conf
+    owner: root
+    group: root
+    mode: '0644'
   when: admin_keys.rc == 0 and (admin_keys.stdout | int) > 0
+
+- name: Find drop-in files that may override our hardening
+  find:
+    paths: /etc/ssh/sshd_config.d
+    patterns: "*.conf"
+    excludes: "00-ia-stack-hardening.conf"
+  register: ssh_dropins
+  when: admin_keys.rc == 0 and (admin_keys.stdout | int) > 0
+
+- name: Remove conflicting PasswordAuthentication from other drop-ins
+  lineinfile:
+    path: "{{ item.path }}"
+    regexp: '^PasswordAuthentication[[:space:]]'
+    state: absent
+  loop: "{{ ssh_dropins.files }}"
+  when:
+    - admin_keys.rc == 0 and (admin_keys.stdout | int) > 0
+    - ssh_dropins.files | length > 0
+
+- name: Remove conflicting PermitRootLogin from other drop-ins
+  lineinfile:
+    path: "{{ item.path }}"
+    regexp: '^PermitRootLogin[[:space:]]'
+    state: absent
+  loop: "{{ ssh_dropins.files }}"
+  when:
+    - admin_keys.rc == 0 and (admin_keys.stdout | int) > 0
+    - ssh_dropins.files | length > 0
 
 - name: Validate the SSH configuration
   command: sshd -t

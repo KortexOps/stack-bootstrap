@@ -1,0 +1,65 @@
+# Dev deployment — triggered on Pull Request.
+# Variables defined here, NOT in a committed .env file.
+# Secrets from Forgejo → Settings → Actions → Secrets.
+#
+# Required Forgejo Secrets:
+#   BASE_DOMAIN       your-domaine.com
+#   PUBLIC_IP         public IP VPS
+#
+# Topology: dev runs only Forgejo + PostgreSQL. It joins the PROD Traefik
+# (network ia-stack-proxy) and the PROD tailnet — no dev Traefik, no dev
+# Headscale. Certs are issued by the prod Traefik (HTTP-01 on public :80);
+# access is tailnet-only (https://dev.git.<BASE_DOMAIN> via the VPS tailnet IP).
+
+name: Deploy Dev
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+jobs:
+  deploy-dev:
+    runs-on: self-hosted-vps
+    concurrency:
+      group: dev-deploy
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Ansible image
+        run: docker build --pull -t my-ansible .
+
+      - name: Deploy dev stack
+        env:
+          PUBLIC_IP: ${{ secrets.PUBLIC_IP }}
+        run: |
+          # Generate .env — Ansible copies it to the server (base.yml).
+          cat > .env << 'ENVEOF'
+          ACME_EMAIL=dev@${{ secrets.BASE_DOMAIN }}
+          FORGEJO_DOMAIN=dev.git.${{ secrets.BASE_DOMAIN }}
+          HEADSCALE_DOMAIN=dev-headscale.${{ secrets.BASE_DOMAIN }}
+          HEADSCALE_DNS_DOMAIN=dev-tailnet.${{ secrets.BASE_DOMAIN }}
+          FORGEJO_ADMIN_USERNAME=dev-admin
+          FORGEJO_ADMIN_EMAIL=dev.admin@${{ secrets.BASE_DOMAIN }}
+          POSTGRES_DB=forgejo
+          POSTGRES_USER=forgejo
+          COMPOSE_PROJECT_NAME=ia-stack-dev
+          ANSIBLE_IMAGE=my-ansible
+          ANSIBLE_USER=deploy
+          ENVEOF
+
+          docker run --rm \
+            -v "$(pwd):/ansible" \
+            -v "$HOME/.ssh:/root/.ssh:ro" \
+            --env-file .env \
+            -e PUBLIC_IP="$PUBLIC_IP" \
+            -e ANSIBLE_USER=deploy \
+            my-ansible \
+            -i inventory-dev.yml playbook.yml \
+            --tags base,forgejo,stack,forgejo-admin,backup
+
+      - name: Show running dev services
+        run: docker compose -f /opt/ia-stack-dev/docker-compose.yml ps

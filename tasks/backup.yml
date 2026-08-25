@@ -1,0 +1,116 @@
+- name: Install rclone
+  apt:
+    name: rclone
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Ensure rclone config directory exists
+  file:
+    path: /root/.config/rclone
+    state: directory
+    mode: '0700'
+
+- name: Remove any stale rclone config
+  file:
+    path: /root/.config/rclone/rclone.conf
+    state: absent
+
+- name: Read the rclone token from the server .env
+  shell: "grep '^RCLONE_CONFIG_TOKEN=' {{ stack_dir }}/.env | head -n1 | cut -d= -f2- | tr -d '\\r' || true"
+  register: rclone_token_raw
+  changed_when: false
+
+- name: Clean and validate the rclone token
+  shell: |
+    set -euo pipefail
+    token="$(grep '^RCLONE_CONFIG_TOKEN=' {{ stack_dir }}/.env | head -n1 | cut -d= -f2- | tr -d '\r')"
+    # Strip single or double quotes if present
+    token="${token#\"}"; token="${token%\"}"
+    token="${token#\'}"; token="${token%\'}"
+    # Validate JSON and output it normalized
+    python3 -c "import json,sys; json.dump(json.loads(sys.argv[1]), sys.stdout)" "$token"
+  args:
+    executable: /bin/bash
+  register: rclone_token_clean
+  changed_when: false
+  when: rclone_token_raw.stdout | trim | length > 0
+
+- name: Configure rclone Google Drive remote
+  copy:
+    content: |
+      # JortexOps — do not edit by hand.
+      [gdrive]
+      type = drive
+      scope = drive.file
+      token = {{ rclone_token_clean.stdout }}
+    dest: /root/.config/rclone/rclone.conf
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  when:
+    - rclone_token_clean is defined
+    - rclone_token_clean.stdout | trim | length > 0
+
+- name: Validate rclone config integrity
+  command: rclone config show gdrive
+  register: rclone_config_check
+  changed_when: false
+  failed_when: false
+  when:
+    - rclone_token_clean is defined
+    - rclone_token_clean.stdout | trim | length > 0
+
+- name: Block deployment when rclone config is malformed
+  assert:
+    that:
+      - rclone_config_check.rc == 0
+      - "'token = ' in rclone_config_check.stdout"
+    fail_msg: >-
+      rclone config for [gdrive] is corrupted — the token was accepted as JSON
+      but rclone rejected it.  Verify that your RCLONE_CONFIG_TOKEN is exactly
+      the output of `rclone authorize "drive"` (one line, no extra quotes).
+  when:
+    - rclone_token_clean is defined
+    - rclone_token_clean.stdout | trim | length > 0
+    - rclone_config_check is defined
+
+- name: Warn when RCLONE_CONFIG_TOKEN is not set
+  debug:
+    msg: >-
+      RCLONE_CONFIG_TOKEN not set in the server .env — Google Drive backups
+      are disabled.  Run once on your laptop:
+
+        rclone authorize "drive"
+
+      then add the printed JSON block to your .env:
+
+        RCLONE_CONFIG_TOKEN={"access_token":"...","token_type":"Bearer",...}
+
+      then re-deploy.
+  when: rclone_token_raw.stdout | trim | length == 0
+
+- name: Ensure the backups directory exists
+  file:
+    path: "{{ stack_dir }}/backups"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Deploy the backup script
+  copy:
+    src: backup.sh
+    dest: "{{ stack_dir }}/backup.sh"
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Deploy the restore script
+  copy:
+    src: restore.sh
+    dest: "{{ stack_dir }}/restore.sh"
+    owner: root
+    group: root
+    mode: '0700'

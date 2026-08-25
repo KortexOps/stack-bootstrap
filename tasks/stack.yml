@@ -1,18 +1,54 @@
 - name: Start the Docker stack
-  shell: docker compose up -d
+  command: docker compose up -d
   args:
-    chdir: /opt/ia-stack
+    chdir: "{{ stack_dir }}"
+  changed_when: false
 
 - name: Wait for the Headscale container to be ready
-  command: docker exec headscale headscale version
+  command: docker exec {{ headscale_container_name }} headscale health
   register: headscale_version
   until: headscale_version.rc == 0
   retries: 30
   delay: 2
   changed_when: false
+  ignore_errors: true
+  when: headscale_enabled | default(true)
+
+- name: Show Headscale logs when its health check fails
+  command: docker logs --tail 100 {{ headscale_container_name }}
+  register: headscale_logs
+  changed_when: false
+  failed_when: false
+  when:
+    - headscale_enabled | default(true)
+    - headscale_version.failed | default(false)
+
+- name: Stop deployment when Headscale is unhealthy
+  fail:
+    msg: "Headscale did not become healthy. Container logs:\n{{ headscale_logs.stdout | default('No logs available') }}\n{{ headscale_logs.stderr | default('') }}"
+  when:
+    - headscale_enabled | default(true)
+    - headscale_version.failed | default(false)
 
 - name: Create the Headscale user
-  command: docker exec headscale headscale users create {{ headscale_user }}
+  command:
+    argv:
+      - docker
+      - exec
+      - "{{ headscale_container_name }}"
+      - headscale
+      - users
+      - create
+      - "{{ headscale_user }}"
   register: headscale_user_create
-  failed_when: false
-  changed_when: "'created' in (headscale_user_create.stdout | lower)"
+  failed_when: >-
+    headscale_user_create.rc != 0 and
+    'already exists' not in (headscale_user_create.stdout | default('') | lower) and
+    'already exists' not in (headscale_user_create.stderr | default('') | lower) and
+    'unique constraint' not in (headscale_user_create.stdout | default('') | lower) and
+    'unique constraint' not in (headscale_user_create.stderr | default('') | lower)
+  changed_when: >-
+    headscale_user_create.rc == 0 and
+    ('created' in (headscale_user_create.stdout | default('') | lower) or
+     'created' in (headscale_user_create.stderr | default('') | lower))
+  when: headscale_enabled | default(true)

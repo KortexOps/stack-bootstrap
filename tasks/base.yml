@@ -20,38 +20,133 @@
       - iproute2
       - lsb-release
       - openssl
+      - openssh-server
+      - sudo
+      - ufw
     state: present
 
 - name: Install Docker
   shell: curl -fsSL https://get.docker.com | sh
   args:
     creates: /usr/bin/docker
+  register: docker_install
+  changed_when: docker_install.rc == 0
+
+- name: Ensure the Docker service is enabled and started
+  systemd:
+    name: docker
+    enabled: true
+    state: started
 
 - name: Create destination directory
   file:
-    path: /opt/ia-stack
+    path: "{{ stack_dir }}"
     state: directory
     mode: '0755'
 
-- name: Copy docker-compose stack
+- name: Render docker-compose stack
+  template:
+    src: templates/docker-compose.yml.j2
+    dest: "{{ stack_dir }}/docker-compose.yml"
+    owner: root
+    group: root
+    mode: '0644'
+
+# The CI runner compose file is not started here (it needs a registration token
+# created manually in the Forgejo admin), but it is deployed so the file is
+# always present — including after a full `make bootstrap` recovery.
+- name: Deploy the CI runner compose file
   copy:
-    src: docker-compose.yml
-    dest: /opt/ia-stack/docker-compose.yml
+    src: docker-compose.runner.yml
+    dest: "{{ stack_dir }}/docker-compose.runner.yml"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Check that the local environment file exists
+  delegate_to: localhost
+  become: false
+  stat:
+    path: "{{ playbook_dir }}/.env"
+  register: local_env_file
+
+- name: Require a local environment file
+  assert:
+    that:
+      - local_env_file.stat.exists
+      - local_env_file.stat.isreg
+    fail_msg: "{{ playbook_dir }}/.env is required; copy .env.example to .env and fill in the required values."
+
+- name: Read the server-side tailnet IP before overwriting .env
+  shell: "grep '^TAILSCALE_IP=' {{ stack_dir }}/.env | head -n1 | cut -d= -f2- | tr -d '\\r' || true"
+  register: server_tailscale_ip
+  changed_when: false
+
+- name: Read the server-side PostgreSQL password before overwriting .env
+  shell: "grep '^POSTGRES_PASSWORD=' {{ stack_dir }}/.env | head -n1 | cut -d= -f2- | tr -d '\\r' || true"
+  register: server_postgres_password
+  changed_when: false
+  no_log: true
 
 - name: Copy .env file
   copy:
     src: .env
-    dest: /opt/ia-stack/.env
+    dest: "{{ stack_dir }}/.env"
     owner: root
     group: root
     mode: '0600'
 
-- name: Set VPS public address in .env
+- name: Pin the Compose project name in .env
   lineinfile:
-    path: /opt/ia-stack/.env
-    regexp: '^PUBLIC_IP='
-    line: "PUBLIC_IP={{ ansible_host | default(ansible_default_ipv4.address) }}"
+    path: "{{ stack_dir }}/.env"
+    regexp: '^COMPOSE_PROJECT_NAME='
+    line: "COMPOSE_PROJECT_NAME={{ compose_project_name }}"
     create: true
     owner: root
     group: root
     mode: '0600'
+
+- name: Preserve the server-side tailnet IP
+  lineinfile:
+    path: "{{ stack_dir }}/.env"
+    regexp: '^TAILSCALE_IP='
+    line: "TAILSCALE_IP={{ server_tailscale_ip.stdout | trim }}"
+    create: true
+    owner: root
+    group: root
+    mode: '0600'
+  when: (server_tailscale_ip.stdout | trim | length) > 0
+
+- name: Preserve the server-side PostgreSQL password
+  lineinfile:
+    path: "{{ stack_dir }}/.env"
+    regexp: '^POSTGRES_PASSWORD='
+    line: "POSTGRES_PASSWORD={{ server_postgres_password.stdout | trim }}"
+    create: true
+    owner: root
+    group: root
+    mode: '0600'
+  when: (server_postgres_password.stdout | trim | length) > 0
+  no_log: true
+
+- name: Set VPS public address in .env
+  lineinfile:
+    path: "{{ stack_dir }}/.env"
+    regexp: '^PUBLIC_IP='
+    line: "PUBLIC_IP={{ ansible_host | default(ansible_facts['default_ipv4']['address'], true) }}"
+    create: true
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Validate required environment values
+  assert:
+    that:
+      - (lookup('file', playbook_dir + '/.env') | regex_search('(?m)^ACME_EMAIL=[^\\r\\n]+') | default('') | trim | length) > 0
+      - (lookup('file', playbook_dir + '/.env') | regex_search('(?m)^HEADSCALE_DOMAIN=[^\\r\\n]+') | default('') | trim | length) > 0
+      - (lookup('file', playbook_dir + '/.env') | regex_search('(?m)^HEADSCALE_DNS_DOMAIN=[^\\r\\n]+') | default('') | trim | length) > 0
+      - (lookup('file', playbook_dir + '/.env') | regex_search('(?m)^FORGEJO_DOMAIN=[^\\r\\n]+') | default('') | trim | length) > 0
+      - (lookup('file', playbook_dir + '/.env') | regex_search('(?m)^POSTGRES_DB=[^\\r\\n]+') | default('') | trim | length) > 0
+      - (lookup('file', playbook_dir + '/.env') | regex_search('(?m)^POSTGRES_USER=[^\\r\\n]+') | default('') | trim | length) > 0
+      - (lookup('file', playbook_dir + '/.env') | regex_search('(?m)^FORGEJO_ADMIN_EMAIL=[^\\r\\n]+') | default('') | trim | length) > 0
+    fail_msg: "ACME_EMAIL, HEADSCALE_DOMAIN, HEADSCALE_DNS_DOMAIN, FORGEJO_DOMAIN, POSTGRES_DB, POSTGRES_USER and FORGEJO_ADMIN_EMAIL must be set in .env."

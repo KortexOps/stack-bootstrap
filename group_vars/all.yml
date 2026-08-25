@@ -1,4 +1,31 @@
 headscale_user: default
 headscale_node_hostname: vps
 ssh_admin_user: deploy
+# Keep root SSH available during bootstrap. Set this to true only after
+# verifying that ANSIBLE_USER=deploy works.
 ssh_disable_root: true
+# Base directory for the Docker Compose stack and its data.
+# Override in group_vars/dev.yml for the dev environment.
+stack_dir: /opt/ia-stack
+
+# ─── Multi‑environment naming ────────────────────────────────────────────────
+# Every container and network is scoped to the Compose project so that prod
+# and dev can coexist on the same VPS without collisions.
+# Dev overrides compose_project_name (and everything derived from it) in
+# group_vars/dev.yml.
+compose_project_name: ia-stack
+traefik_container_name: "{{ compose_project_name }}-traefik"
+headscale_container_name: "{{ compose_project_name }}-headscale"
+forgejo_container_name: "{{ compose_project_name }}-forgejo"
+forgejo_db_container_name: "{{ compose_project_name }}-forgejo-db"
+proxy_network_name: "{{ compose_project_name }}-proxy"
+backend_network_name: "{{ compose_project_name }}-forgejo-backend"
+
+# ─── Environment topology ────────────────────────────────────────────────────
+# Prod runs its own Traefik + Headscale. Dev (dev.yml) reuses the prod Traefik
+# and tailnet instead: it runs only Forgejo + PostgreSQL, joins the prod proxy
+# network, and registers its routers on the prod Traefik (unique router names
+# via traefik_router_prefix avoid collisions).
+use_shared_proxy: false
+headscale_enabled: true
+traefik_router_prefix: "{{ compose_project_name }}"

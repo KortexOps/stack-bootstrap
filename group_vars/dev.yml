@@ -1,0 +1,13 @@
+# Dev environment overrides (loaded when deploying with -i inventory-dev.yml).
+# All other variables come from group_vars/all.yml defaults.
+#
+# Topology: dev runs ONLY Forgejo + PostgreSQL. It reuses the prod Traefik
+# (certs via HTTP-01 on public :80, access through the tailnet only) and the
+# prod tailnet (the VPS is already a tailnet node). No dev Traefik, no dev
+# Headscale.
+compose_project_name: ia-stack-dev
+stack_dir: /opt/ia-stack-dev
+use_shared_proxy: true
+headscale_enabled: false
+# Join the PROD Traefik network so the prod Traefik routes dev services.
+proxy_network_name: ia-stack-proxy

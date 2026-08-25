@@ -1,21 +1,27 @@
 - name: Read the Headscale domain from the server env
-  shell: "grep '^HEADSCALE_DOMAIN=' /opt/ia-stack/.env | head -n1 | cut -d= -f2- | tr -d '\\r' || true"
+  shell: "grep '^HEADSCALE_DOMAIN=' {{ stack_dir }}/.env | head -n1 | cut -d= -f2- | tr -d '\\r' || true"
   register: headscale_domain_raw
   changed_when: false
   no_log: true
 
+- name: Read the Headscale DNS domain from the server env
+  shell: "grep '^HEADSCALE_DNS_DOMAIN=' {{ stack_dir }}/.env | head -n1 | cut -d= -f2- | tr -d '\\r' || true"
+  register: headscale_dns_domain_raw
+  changed_when: false
+  no_log: true
+
 - name: Read the Forgejo domain from the server env
-  shell: "grep '^FORGEJO_DOMAIN=' /opt/ia-stack/.env | head -n1 | cut -d= -f2- | tr -d '\\r' || true"
+  shell: "grep '^FORGEJO_DOMAIN=' {{ stack_dir }}/.env | head -n1 | cut -d= -f2- | tr -d '\\r' || true"
   register: forgejo_domain_raw
   changed_when: false
   no_log: true
 
-- name: Read the tailnet IP from the server env
-  shell: "grep '^TAILSCALE_IP=' /opt/ia-stack/.env | head -n1 | cut -d= -f2- | tr -d '\\r' || true"
+- name: Read the configured tailnet IP from the server env
+  shell: "grep '^TAILSCALE_IP=' {{ stack_dir }}/.env | head -n1 | cut -d= -f2- | tr -d '\\r' || true"
   register: tailscale_ip_raw
   changed_when: false
 
-- name: Read the live tailnet IP
+- name: Read the live tailnet IP when it is not stored yet
   command: tailscale ip -4
   register: tailscale_ip_live
   failed_when: false
@@ -24,48 +30,85 @@
 
 - name: Determine the tailnet IP
   set_fact:
-    tailnet_ip: "{{ tailscale_ip_raw.stdout | trim if (tailscale_ip_raw.stdout | trim | length) > 0 else (tailscale_ip_live.stdout_lines | default([]) | first | default('', true)) }}"
+    tailnet_ip: >-
+      {{ tailscale_ip_raw.stdout | trim if (tailscale_ip_raw.stdout | trim | length) > 0
+         else (tailscale_ip_live.stdout | default('') | trim) }}
 
-- name: Verify HEADSCALE_DOMAIN is set
+- name: Validate Headscale and Forgejo domains
   assert:
     that:
       - (headscale_domain_raw.stdout | trim | length) > 0
-    fail_msg: "HEADSCALE_DOMAIN is missing from .env (e.g. headscale.jortexops.duckdns.org). Add it before deploying."
+      - (headscale_dns_domain_raw.stdout | trim | length) > 0
+      - (forgejo_domain_raw.stdout | trim | length) > 0
+      - "'YOUR_' not in (headscale_domain_raw.stdout | trim)"
+      - "'YOUR_' not in (headscale_dns_domain_raw.stdout | trim)"
+      - "'YOUR_' not in (forgejo_domain_raw.stdout | trim)"
+      - (headscale_domain_raw.stdout | trim) is match('^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$')
+      - (headscale_dns_domain_raw.stdout | trim) is match('^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$')
+      - (forgejo_domain_raw.stdout | trim) is match('^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$')
+      - (headscale_domain_raw.stdout | trim) != (forgejo_domain_raw.stdout | trim)
+      - (headscale_domain_raw.stdout | trim) != (headscale_dns_domain_raw.stdout | trim)
+      - (forgejo_domain_raw.stdout | trim) != (headscale_dns_domain_raw.stdout | trim)
+    fail_msg: "HEADSCALE_DOMAIN, HEADSCALE_DNS_DOMAIN and FORGEJO_DOMAIN must be set, valid and different."
 
-- name: Create the headscale configuration directory
+- name: Validate the tailnet IP when available
+  assert:
+    that:
+      - (tailnet_ip) is match('^100\\.(?:6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\\.(?:[0-9]{1,3})\\.(?:[0-9]{1,3})$')
+    fail_msg: "TAILSCALE_IP must be a valid IPv4 address in the 100.64.0.0/10 tailnet range."
+  when: (tailnet_ip | length) > 0
+
+- name: Create the Headscale configuration directory
   file:
-    path: /opt/ia-stack/headscale
+    path: "{{ stack_dir }}/headscale"
     state: directory
+    owner: root
+    group: root
     mode: '0755'
 
-- name: Copy the headscale configuration
+- name: Copy the Headscale configuration
   template:
     src: services/headscale/config.yaml.j2
-    dest: /opt/ia-stack/headscale/config.yaml
+    dest: "{{ stack_dir }}/headscale/config.yaml"
+    owner: root
+    group: root
     mode: '0644'
   register: headscale_config
   vars:
     headscale_domain: "{{ headscale_domain_raw.stdout | trim }}"
+    headscale_dns_domain: "{{ headscale_dns_domain_raw.stdout | trim }}"
     forgejo_domain: "{{ forgejo_domain_raw.stdout | trim }}"
-    tailnet_ip: "{{ tailnet_ip }}"
-    dns_extra_records: "{{ [{'name': forgejo_domain, 'type': 'A', 'value': tailnet_ip}] if (forgejo_domain | length > 0 and tailnet_ip | length > 0) else [] }}"
+    dns_extra_records: >-
+      {{ [{'name': forgejo_domain_raw.stdout | trim, 'type': 'A', 'value': tailnet_ip}]
+         if (forgejo_domain_raw.stdout | trim | length > 0 and tailnet_ip | length > 0)
+         else [] }}
 
 - name: Copy the Headscale ACL policy
   template:
     src: services/headscale/policy.hujson.j2
-    dest: /opt/ia-stack/headscale/policy.hujson
+    dest: "{{ stack_dir }}/headscale/policy.hujson"
+    owner: root
+    group: root
     mode: '0644'
   register: headscale_policy
-  vars:
-    tailnet_ip: "{{ tailnet_ip }}"
   when: (tailnet_ip | length) > 0
 
+- name: Check whether the Headscale container exists
+  command: docker container inspect {{ headscale_container_name }}
+  register: headscale_container
+  changed_when: false
+  failed_when: false
+
 - name: Validate the Headscale ACL policy
-  command: docker exec headscale headscale policy check --file /etc/headscale/policy.hujson
+  command: docker exec {{ headscale_container_name }} headscale policy check --file /etc/headscale/policy.hujson
   when:
     - (tailnet_ip | length) > 0
     - headscale_policy.changed | default(false)
+    - headscale_container.rc == 0
 
-- name: Restart Headscale to apply the DNS records and the ACL policy
-  command: docker restart headscale
-  when: (headscale_config.changed or headscale_policy.changed | default(false)) and (tailnet_ip | length) > 0
+- name: Restart Headscale to apply the DNS records and ACL policy
+  command: docker restart {{ headscale_container_name }}
+  when:
+    - (tailnet_ip | length) > 0
+    - (headscale_config.changed or headscale_policy.changed | default(false))
+    - headscale_container.rc == 0
