@@ -19,10 +19,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build Ansible image
-        run: docker build --pull -t my-ansible .
-
-      - name: Deploy prod stack
+      - name: Generate .env file
         env:
           PUBLIC_IP: ${{ secrets.PUBLIC_IP }}
         run: |
@@ -43,6 +40,13 @@ jobs:
           ANSIBLE_USER=deploy
           ENVEOF
 
+      - name: Build Ansible image
+        run: docker build --pull -t my-ansible .
+
+      - name: Deploy prod stack
+        env:
+          PUBLIC_IP: ${{ secrets.PUBLIC_IP }}
+        run: |
           docker run --rm \
             -v "$HOME/.ssh:/root/.ssh:ro" \
             --env-file .env \

@@ -3,8 +3,8 @@
 # Secrets from Forgejo → Settings → Actions → Secrets.
 #
 # Required Forgejo Secrets:
-#   BASE_DOMAIN       your-domaine.com
-#   PUBLIC_IP         public IP VPS
+#   BASE_DOMAIN        your-domaine.com
+#   PUBLIC_IP          public IP VPS
 #
 # Topology: dev runs only Forgejo + PostgreSQL. It joins the PROD Traefik
 # (network ia-stack-proxy) and the PROD tailnet — no dev Traefik, no dev
@@ -29,11 +29,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Deploy dev stack
+      - name: Generate .env file
         env:
           PUBLIC_IP: ${{ secrets.PUBLIC_IP }}
         run: |
-          # Generate .env — Ansible copies it to the server (base.yml).
           cat > .env << 'ENVEOF'
           ACME_EMAIL=dev@${{ secrets.BASE_DOMAIN }}
           FORGEJO_DOMAIN=dev-git-${{ secrets.BASE_DOMAIN }}
@@ -47,9 +46,14 @@ jobs:
           ANSIBLE_IMAGE=my-ansible
           ANSIBLE_USER=deploy
           ENVEOF
-            
-          docker build --pull -t my-ansible .
-            
+
+      - name: Build Ansible image
+        run: docker build --pull -t my-ansible .
+
+      - name: Deploy dev stack
+        env:
+          PUBLIC_IP: ${{ secrets.PUBLIC_IP }}
+        run: |
           docker run --rm \
             -v "$HOME/.ssh:/root/.ssh:ro" \
             --env-file .env \
