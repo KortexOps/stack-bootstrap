@@ -17,37 +17,37 @@
 
   tasks:
     - name: Base system setup
-      include_tasks: tasks/base.yml
+      import_tasks: tasks/base.yml
       tags: ['base']
 
     - name: Headscale configuration
-      include_tasks: tasks/headscale.yml
+      import_tasks: tasks/headscale.yml
       tags: ['headscale']
 
     - name: Forgejo configuration
-      include_tasks: tasks/forgejo.yml
+      import_tasks: tasks/forgejo.yml
       tags: ['forgejo']
 
     - name: Start the stack
-      include_tasks: tasks/stack.yml
+      import_tasks: tasks/stack.yml
       tags: ['stack']
 
     - name: Tailscale node setup
-      include_tasks: tasks/tailscale.yml
+      import_tasks: tasks/tailscale.yml
       tags: ['tailscale']
 
     - name: Re-render Headscale config after the VPS joined the tailnet
-      include_tasks: tasks/headscale.yml
+      import_tasks: tasks/headscale.yml
       tags: ['headscale']
 
     - name: Forgejo administrator
-      include_tasks: tasks/forgejo-admin.yml
+      import_tasks: tasks/forgejo-admin.yml
       tags: ['forgejo-admin']
 
     - name: Server hardening
-      include_tasks: tasks/hardening.yml
+      import_tasks: tasks/hardening.yml
       tags: ['hardening']
 
     - name: Backup tooling (rclone + backup script)
-      include_tasks: tasks/backup.yml
+      import_tasks: tasks/backup.yml
       tags: ['backup']
