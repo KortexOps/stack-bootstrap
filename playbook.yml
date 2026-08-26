@@ -1,5 +1,5 @@
 - name: Server Stack Deployment
-  hosts: vps-ia
+  hosts: all
   become: true
   gather_facts: true
 
