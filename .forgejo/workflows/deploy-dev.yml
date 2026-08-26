@@ -29,9 +29,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build Ansible image
-        run: docker build --pull -t my-ansible .
-
       - name: Deploy dev stack
         env:
           PUBLIC_IP: ${{ secrets.PUBLIC_IP }}
@@ -50,9 +47,10 @@ jobs:
           ANSIBLE_IMAGE=my-ansible
           ANSIBLE_USER=deploy
           ENVEOF
-
+            
+          docker build --pull -t my-ansible .
+            
           docker run --rm \
-            -v "$(pwd):/ansible" \
             -v "$HOME/.ssh:/root/.ssh:ro" \
             --env-file .env \
             -e PUBLIC_IP="$PUBLIC_IP" \

@@ -8,4 +8,5 @@ ARG ANSIBLE_VERSION=10.7.0
 RUN pip install --no-cache-dir "ansible==${ANSIBLE_VERSION}"
 
 WORKDIR /ansible
+COPY . /ansible
 ENTRYPOINT ["ansible-playbook"]

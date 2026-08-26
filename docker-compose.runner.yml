@@ -1,37 +1,5 @@
-# Forgejo Actions self-hosted runner — runs CI jobs directly on the VPS.
-#
-# Bootstrap:
-#   1. Rebuild the stack first, if needed (make bootstrap).
-#   2. Create a runner token: https://git.<domaine>/admin/actions/runners
-#   3. Save it:  echo "TOKEN" | sudo tee /opt/ia-stack/.runner_token && sudo chmod 600 /opt/ia-stack/.runner_token
-#   4. Give the CI an SSH key for the deploy user (one-time, on the VPS):
-#        sudo ssh-keygen -t ed25519 -N "" -f /root/.ssh/id_ed25519
-#        sudo sh -c 'cat /root/.ssh/id_ed25519.pub >> /home/deploy/.ssh/authorized_keys'
-#        sudo ssh-keyscan -H <PUBLIC_IP> >> /root/.ssh/known_hosts
-#   5. Start the runner (FORGEJO_INSTANCE_URL is derived from FORGEJO_DOMAIN in
-#      the stack's .env — no need to pass it by hand):
-#        sudo docker compose -f /opt/ia-stack/docker-compose.runner.yml up -d
-#   6. Verify:  https://git.<domaine>/admin/actions/runners
-#
-# Notes:
-#   - The runner image ships as a non-root user; we override `user: 0:0` so the
-#     first-boot script can read the registration secret and write /data.
-#   - On first start the entrypoint generates /data/config.yml, registers with
-#     the token (only if /data/.runner is missing or empty — a stale empty file
-#     is removed and re-registered), then starts the daemon. If registration
-#     fails, the container exits and restarts (set -euo pipefail) instead of
-#     writing a broken .runner file.
-#   - Jobs run in a node:20-bookworm container (label self-hosted-vps, which the
-#     workflows reference with `runs-on: self-hosted-vps`). The host docker socket
-#     lets jobs run `docker build`/`docker run`; paths in those -v flags resolve on
-#     the HOST, so the workflows' `-v $HOME/.ssh:/root/.ssh:ro` picks up the CI key
-#     generated in step 4.
-
 services:
   runner:
-    # Forgejo Runner has its own versioning, independent of the Forgejo server.
-    # Forgejo 10.x pairs with runner 6.x; newer runners (11+/12+/13) require
-    # newer Forgejo servers. Bump together with FORGEJO_IMAGE in .env.
     image: data.forgejo.org/forgejo/runner:6.4.0
     container_name: forgejo-runner
     restart: unless-stopped
@@ -40,7 +8,6 @@ services:
       - no-new-privileges:true
     environment:
       - DOCKER_HOST=unix:///var/run/docker.sock
-      # Interpolated by docker compose from /opt/ia-stack/.env (FORGEJO_DOMAIN).
       - FORGEJO_INSTANCE_URL=http://ia-stack-forgejo:3000
     networks:
       - forgejo_network
@@ -56,19 +23,25 @@ services:
         cd /data
 
         if [ ! -f /data/config.yml ]; then
-          echo "==> Generating default runner config..."
-          forgejo-runner generate-config > /data/config.yml
-          # Share the host Docker socket with job containers (the workflows run
-          # docker build / docker run, which need a daemon inside the job).
-          sed -i 's|^\([[:space:]]*\)docker_host:.*|\1docker_host: "automount"|' /data/config.yml
-          # Declare the label so jobs with `runs-on: self-hosted-vps` match.
-          sed -i 's|^\([[:space:]]*\)labels: \[\]|\1labels:\n\1  - self-hosted-vps:docker://node:20-bookworm|' /data/config.yml
+          echo "==> Generating clean runner config..."
+          cat > /data/config.yml << 'EOF'
+        log:
+          level: info
+        runner:
+          file: .runner
+          capacity: 1
+          timeout: 3h
+        container:
+          network: "ia-stack-forgejo-backend"
+          valid_volumes:
+            - "**"
+          options: "-v /var/run/docker.sock:/var/run/docker.sock -v /root/.ssh:/root/.ssh:ro"
+          labels:
+            - "self-hosted-vps:docker://gitea/runner-images:ubuntu-latest"
+        EOF
         fi
 
         if [ ! -s /data/.runner ]; then
-          # An empty .runner (left over from a failed registration) makes the
-          # daemon crash with "failed to load registration file: EOF". Remove
-          # it and re-register instead of dying on a stale file.
           rm -f /data/.runner
           echo "==> Registering runner..."
           forgejo-runner register \
@@ -76,7 +49,7 @@ services:
             --token "$$(cat /run/secrets/runner_token)" \
             --name "vps-runner" \
             --instance "$$FORGEJO_INSTANCE_URL" \
-            --labels "self-hosted-vps:docker://node:20-bookworm"
+            --labels "self-hosted-vps:docker://gitea/runner-images:ubuntu-latest"
           touch /data/.runner
         fi
 

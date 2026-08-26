@@ -44,7 +44,6 @@ jobs:
           ENVEOF
 
           docker run --rm \
-            -v "$(pwd):/ansible" \
             -v "$HOME/.ssh:/root/.ssh:ro" \
             --env-file .env \
             -e PUBLIC_IP="$PUBLIC_IP" \
