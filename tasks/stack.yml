@@ -2,7 +2,6 @@
   command: docker compose up -d
   args:
     chdir: "{{ stack_dir }}"
-  changed_when: false
 
 - name: Wait for the Headscale container to be ready
   command: docker exec {{ headscale_container_name }} headscale health
