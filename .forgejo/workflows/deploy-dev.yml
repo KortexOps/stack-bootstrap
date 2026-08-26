@@ -36,9 +36,9 @@ jobs:
           # Generate .env — Ansible copies it to the server (base.yml).
           cat > .env << 'ENVEOF'
           ACME_EMAIL=dev@${{ secrets.BASE_DOMAIN }}
-          FORGEJO_DOMAIN=dev.git.${{ secrets.BASE_DOMAIN }}
-          HEADSCALE_DOMAIN=dev-headscale.${{ secrets.BASE_DOMAIN }}
-          HEADSCALE_DNS_DOMAIN=dev-tailnet.${{ secrets.BASE_DOMAIN }}
+          FORGEJO_DOMAIN=dev-git-${{ secrets.BASE_DOMAIN }}
+          HEADSCALE_DOMAIN=dev-headscale-${{ secrets.BASE_DOMAIN }}
+          HEADSCALE_DNS_DOMAIN=dev-tailnet-${{ secrets.BASE_DOMAIN }}
           FORGEJO_ADMIN_USERNAME=dev-admin
           FORGEJO_ADMIN_EMAIL=dev.admin@${{ secrets.BASE_DOMAIN }}
           POSTGRES_DB=forgejo
@@ -58,7 +58,9 @@ jobs:
             -e ANSIBLE_HOST_KEY_CHECKING=False \
             my-ansible \
             -i inventory-dev.yml playbook.yml \
-            --tags base,forgejo,stack,forgejo-admin,backup
+            -e "COMPOSE_PROJECT_NAME=ia-stack-dev" \
+            -e "force_recreate=true" \
+            --tags base,forgejo,stack,forgejo-admin
 
       - name: Show running dev services
         run: docker ps --filter "name=ia-stack-dev"
