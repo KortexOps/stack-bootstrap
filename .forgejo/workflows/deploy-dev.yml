@@ -55,9 +55,10 @@ jobs:
             --env-file .env \
             -e PUBLIC_IP="$PUBLIC_IP" \
             -e ANSIBLE_USER=deploy \
+            -e ANSIBLE_HOST_KEY_CHECKING=False \
             my-ansible \
             -i inventory-dev.yml playbook.yml \
             --tags base,forgejo,stack,forgejo-admin,backup
 
       - name: Show running dev services
-        run: docker compose -f /opt/ia-stack-dev/docker-compose.yml ps
+        run: docker ps --filter "name=ia-stack-dev"

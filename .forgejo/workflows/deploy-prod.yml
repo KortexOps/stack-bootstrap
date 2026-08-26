@@ -48,6 +48,7 @@ jobs:
             --env-file .env \
             -e PUBLIC_IP="$PUBLIC_IP" \
             -e ANSIBLE_USER=deploy \
+            -e ANSIBLE_HOST_KEY_CHECKING=False \
             my-ansible \
             -i inventory-prod.yml playbook.yml \
             --tags all
