@@ -55,11 +55,13 @@ jobs:
           PUBLIC_IP: ${{ secrets.PUBLIC_IP }}
         run: |
           docker run --rm \
-            -v "$HOME/.ssh:/root/.ssh:ro" \
+            -v "$HOME/.ssh:/root/.ssh" \
             --env-file .env \
             -e PUBLIC_IP="$PUBLIC_IP" \
             -e ANSIBLE_USER=deploy \
             -e ANSIBLE_HOST_KEY_CHECKING=False \
+            -e ANSIBLE_SSH_ARGS="-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no" \
+            -e ANSIBLE_PRIVATE_KEY_FILE=/root/.ssh/id_ed25519 \
             my-ansible \
             -i inventory-dev.yml playbook.yml \
             -e "COMPOSE_PROJECT_NAME=ia-stack-dev" \

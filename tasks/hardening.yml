@@ -19,15 +19,29 @@
     path: /root/.ssh/authorized_keys
   register: root_authorized_keys
 
-- name: Copy the root SSH key to the admin user
-  copy:
+- name: Check if admin user authorized_keys already exists
+  stat:
+    path: /home/{{ ssh_admin_user }}/.ssh/authorized_keys
+  register: admin_authorized_keys
+
+- name: Read existing admin authorized keys if any
+  slurp:
+    src: /home/{{ ssh_admin_user }}/.ssh/authorized_keys
+  register: existing_admin_keys
+  when: admin_authorized_keys.stat.exists
+
+- name: Read root authorized keys
+  slurp:
     src: /root/.ssh/authorized_keys
-    dest: /home/{{ ssh_admin_user }}/.ssh/authorized_keys
-    owner: "{{ ssh_admin_user }}"
-    group: "{{ ssh_admin_user }}"
-    mode: '0600'
-    remote_src: true
+  register: root_keys_slurp
   when: root_authorized_keys.stat.exists
+
+- name: Ensure root and admin keys are merged for the admin user
+  authorized_key:
+    user: "{{ ssh_admin_user }}"
+    key: "{{ item }}"
+  loop: "{{ (root_keys_slurp.content | b64decode).splitlines() + (existing_admin_keys.content | b64decode | default('')).splitlines() }}"
+  when: item | trim | length > 0
 
 - name: Grant passwordless sudo to the admin user
   copy:
