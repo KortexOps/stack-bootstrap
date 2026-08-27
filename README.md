@@ -208,7 +208,7 @@ How it works:
 the prod `ia-stack-proxy` network and register routers
 (`ia-stack-dev-forgejo`…) on the prod Traefik (unique router names avoid
 colliding with prod routers).
-- The prod Traefik issues the certificate for `dev.git.<BASE_DOMAIN>` via
+- The prod Traefik issues the certificate for `dev-git-<BASE_DOMAIN>` via
 HTTP-01 (the domain must resolve publicly to the VPS) but serves dev **only on
 the tailnet entrypoint** — dev is never exposed on the public internet, same
 privacy model as prod.
@@ -221,23 +221,23 @@ feature branch ──(open PR)─────> dev stack auto-deploy
       └──(merge to main)──────> prod stack auto-deploy
 ```
 
-To reach the dev instance, point `dev.git.<BASE_DOMAIN>` at the VPS tailnet IP
+To reach the dev instance, point `dev-git-<BASE_DOMAIN>` at the VPS tailnet IP
 (same pattern as prod's hosts entry):
 
 ```bash
 # find the VPS tailnet IP
 ssh deploy@YOUR_VPS_IP 'sudo grep ^TAILSCALE_IP= /opt/ia-stack/.env | cut -d= -f2-'
 # add the dev host entry (replace the IP)
-echo "<TAILSCALE_IP>  dev.git.YOUR_DOMAIN.com" | sudo tee -a /etc/hosts
+echo "<TAILSCALE_IP>  dev-git-YOUR_DOMAIN.com" | sudo tee -a /etc/hosts
 # open in your browser
-https://dev.git.YOUR_DOMAIN.com
+https://dev-git-YOUR_DOMAIN.com
 ```
 
 The dev admin is `dev-admin` (password generated on the server at
 `/opt/ia-stack-dev/.forgejo_admin_password`).
 
-> The `dev.git.`, `dev-headscale.` and `dev-tailnet.` names are still required
-> in the dev `.env` (the playbook validates them), but only `dev.git.` must
+> The `dev-git-`, `dev-headscale-` and `dev-tailnet-` names are still required
+> in the dev `.env` (the playbook validates them), but only `dev-git-` must
 > resolve publicly (for the certificate). Dev joins the prod tailnet, so its
 > own Headscale/Tailscale variables are unused.
 
@@ -509,9 +509,10 @@ The playbook ends with a hardening section that:
 
 ## Troubleshooting
 
-- **Certificate not issued** — `HEADSCALE_DOMAIN` and `FORGEJO_DOMAIN` must resolve publicly to the VPS and ports 80/443 must be open.
+- **Certificate not issued** — `HEADSCALE_DOMAIN` and `FORGEJO_DOMAIN` must resolve publicly to the VPS and ports 80/443 must be open. The public A record must point to the **public IP** of the VPS: Let's Encrypt validates the HTTP-01 challenge from the public internet and cannot reach a tailnet IP. If the record points at a `100.x.y.z` tailnet address, Traefik logs `no valid A records found` and no certificate is issued. (Clients reach Forgejo through the tailnet via the Headscale MagicDNS extra record or the `/etc/hosts` entry — the public record is only used for the certificate challenge.)
 - **Client can't register** — `HEADSCALE_DOMAIN` must be reachable over public HTTPS, and the pre-auth key must be valid (single-use keys expire after one use).
 - **Forgejo unreachable from the tailnet** — run `tailscale status` on the client, confirm the VPS node is up, and that `FORGEJO_DOMAIN` resolves to the VPS tailnet IP (hosts entry or MagicDNS).
 - **No direct connection between nodes** — open UDP 41641 inbound, otherwise traffic falls back to DERP relays.
+- **`docker compose up` fails with `cannot assign requested address` on a tailnet IP** — the `TAILSCALE_IP` stored in the server `.env` is stale (e.g. after a recovery where the node re-joined the tailnet with a new address). The playbook now detects this before starting the stack: it aligns the stored IP with the live `tailscale ip -4`, or falls back to `127.0.0.1` until the VPS has joined. Just re-deploy.
 - **A service became unreachable after the ACL applied** — the policy is deny-by-default; add the missing rule and redeploy.
 - **SSH connection failed** — ensure the deploy key is in `/root/.ssh/authorized_keys` (bootstrap) or `/home/deploy/.ssh/authorized_keys` (later), and `known_hosts` contains the VPS key.

@@ -1,3 +1,46 @@
+- name: Read the stored tailnet IP from the server env
+  shell: "grep '^TAILSCALE_IP=' {{ stack_dir }}/.env | head -n1 | cut -d= -f2- | tr -d '\\r' || true"
+  register: stored_tailnet_ip
+  changed_when: false
+
+- name: Read the live tailnet IP
+  command: tailscale ip -4
+  register: live_tailnet_ip
+  changed_when: false
+  failed_when: false
+
+# After a recovery (make bootstrap) the server .env may still hold the IP from
+# the previous install while the node re-joined the tailnet with a new one.
+# Binding Traefik to a stale IP makes `docker compose up` fail with
+# "cannot assign requested address", so align the stored IP with the live
+# interface before starting the stack. When Tailscale is not up yet (fresh
+# bootstrap), fall back to 127.0.0.1; tasks/tailscale.yml stores the real IP
+# and restarts the stack to rebind once the VPS has joined.
+- name: Align the stored tailnet IP with the live interface
+  lineinfile:
+    path: "{{ stack_dir }}/.env"
+    regexp: '^TAILSCALE_IP='
+    line: "TAILSCALE_IP={{ live_tailnet_ip.stdout | trim }}"
+    owner: root
+    group: root
+    mode: '0600'
+  when:
+    - live_tailnet_ip.rc == 0
+    - (live_tailnet_ip.stdout | trim | length) > 0
+    - (stored_tailnet_ip.stdout | trim) != (live_tailnet_ip.stdout | trim)
+
+- name: Clear the stored tailnet IP when Tailscale is not up
+  lineinfile:
+    path: "{{ stack_dir }}/.env"
+    regexp: '^TAILSCALE_IP='
+    line: "TAILSCALE_IP="
+    owner: root
+    group: root
+    mode: '0600'
+  when:
+    - live_tailnet_ip.rc != 0 or (live_tailnet_ip.stdout | trim | length) == 0
+    - (stored_tailnet_ip.stdout | trim | length) > 0
+
 - name: Start the Docker stack
   command: docker compose up -d
   args:

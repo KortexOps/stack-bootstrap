@@ -155,7 +155,7 @@ services:
       - "traefik.enable=true"
       - "traefik.docker.network={{ proxy_network_name }}"
       - "traefik.http.routers.{{ traefik_router_prefix }}-forgejo.rule=Host(`${FORGEJO_DOMAIN}`)"
-      - "traefik.http.routers.{{ traefik_router_prefix }}-forgejo.entrypoints=web-internal"
+      - "traefik.http.routers.{{ traefik_router_prefix }}-forgejo.entrypoints=websecure"
       - "traefik.http.routers.{{ traefik_router_prefix }}-forgejo.tls=true"
       - "traefik.http.routers.{{ traefik_router_prefix }}-forgejo.tls.certresolver=letsencrypt"
       - "traefik.http.services.{{ traefik_router_prefix }}-forgejo.loadbalancer.server.port=3000"
