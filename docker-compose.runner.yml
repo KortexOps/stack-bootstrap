@@ -6,9 +6,12 @@ services:
     user: "0:0"
     security_opt:
       - no-new-privileges:true
+    env_file:
+      - .env
     environment:
       - DOCKER_HOST=unix:///var/run/docker.sock
-      - FORGEJO_INSTANCE_URL=http://ia-stack-forgejo:3000
+      - FORGEJO_INSTANCE_URL=https://${FORGEJO_DOMAIN:-git.example.invalid}
+      - RUNNER_NETWORK=${RUNNER_NETWORK:-ia-stack-forgejo-backend}
     networks:
       - forgejo_network
     volumes:
@@ -32,7 +35,7 @@ services:
           capacity: 1
           timeout: 3h
         container:
-          network: "ia-stack-forgejo-backend"
+          network: "${RUNNER_NETWORK}"
           valid_volumes:
             - "**"
           options: "-v /var/run/docker.sock:/var/run/docker.sock -v /root/.ssh:/root/.ssh:ro"
@@ -66,5 +69,5 @@ volumes:
 
 networks:
   forgejo_network:
-    name: ia-stack-forgejo-backend
+    name: ${RUNNER_NETWORK:-ia-stack-forgejo-backend}
     external: true

@@ -16,6 +16,7 @@ SERVER_USER    ?= deploy
 SERVER_HOST    ?=
 HEADSCALE_USER ?= default
 HEADSCALE_CONTAINER ?= ia-stack-headscale
+RUNNER_NETWORK     ?= ia-stack-forgejo-backend
 STACK_DIR_PROD ?= /opt/ia-stack
 STACK_DIR_DEV  ?= /opt/ia-stack-dev
 SSH_OPTS       := -o BatchMode=yes -o ConnectTimeout=10 -i $(SSH_PRIVATE_KEY)
@@ -141,7 +142,7 @@ ci-enable: ## Enable CI/CD — start the Forgejo Actions runner on the VPS
 	       echo "   then: echo 'TOKEN' | sudo tee $(STACK_DIR_PROD)/.runner_token && sudo chmod 600 $(STACK_DIR_PROD)/.runner_token" >&2; \
 	       exit 1; }
 	@echo "==> Starting the CI runner..."
-	ssh $(SSH_OPTS) $(SSH_TARGET) "cd $(STACK_DIR_PROD) && $(DOCKER_SUDO) docker compose -f docker-compose.runner.yml up -d"
+	ssh $(SSH_OPTS) $(SSH_TARGET) "cd $(STACK_DIR_PROD) && $(DOCKER_SUDO) docker compose -f docker-compose.runner.yml run --rm -T -e RUNNER_NETWORK=$(RUNNER_NETWORK) runner true >/dev/null 2>&1 || true; $(DOCKER_SUDO) RUNNER_NETWORK=$(RUNNER_NETWORK) docker compose -f docker-compose.runner.yml up -d"
 	@echo "==> CI/CD enabled. Verify: https://$(FORGEJO_DOMAIN)/admin/actions/runners"
 
 ci-disable: ## Disable CI/CD — stop the Forgejo Actions runner (jobs stop being picked up)

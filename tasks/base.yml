@@ -139,14 +139,22 @@
     group: root
     mode: '0600'
 
+- name: Read the local environment file for validation
+  delegate_to: localhost
+  become: false
+  slurp:
+    src: "{{ playbook_dir }}/.env"
+  register: local_env_content
+  no_log: true
+
 - name: Validate required environment values
   assert:
     that:
-      - (lookup('file', playbook_dir + '/.env') | regex_search('(?m)^ACME_EMAIL=[^\\r\\n]+') | default('') | trim | length) > 0
-      - (lookup('file', playbook_dir + '/.env') | regex_search('(?m)^HEADSCALE_DOMAIN=[^\\r\\n]+') | default('') | trim | length) > 0
-      - (lookup('file', playbook_dir + '/.env') | regex_search('(?m)^HEADSCALE_DNS_DOMAIN=[^\\r\\n]+') | default('') | trim | length) > 0
-      - (lookup('file', playbook_dir + '/.env') | regex_search('(?m)^FORGEJO_DOMAIN=[^\\r\\n]+') | default('') | trim | length) > 0
-      - (lookup('file', playbook_dir + '/.env') | regex_search('(?m)^POSTGRES_DB=[^\\r\\n]+') | default('') | trim | length) > 0
-      - (lookup('file', playbook_dir + '/.env') | regex_search('(?m)^POSTGRES_USER=[^\\r\\n]+') | default('') | trim | length) > 0
-      - (lookup('file', playbook_dir + '/.env') | regex_search('(?m)^FORGEJO_ADMIN_EMAIL=[^\\r\\n]+') | default('') | trim | length) > 0
+      - (local_env_content.content | b64decode | regex_search('(?m)^ACME_EMAIL=[^\\r\\n]+') | default('') | trim | length) > 0
+      - (local_env_content.content | b64decode | regex_search('(?m)^HEADSCALE_DOMAIN=[^\\r\\n]+') | default('') | trim | length) > 0
+      - (local_env_content.content | b64decode | regex_search('(?m)^HEADSCALE_DNS_DOMAIN=[^\\r\\n]+') | default('') | trim | length) > 0
+      - (local_env_content.content | b64decode | regex_search('(?m)^FORGEJO_DOMAIN=[^\\r\\n]+') | default('') | trim | length) > 0
+      - (local_env_content.content | b64decode | regex_search('(?m)^POSTGRES_DB=[^\\r\\n]+') | default('') | trim | length) > 0
+      - (local_env_content.content | b64decode | regex_search('(?m)^POSTGRES_USER=[^\\r\\n]+') | default('') | trim | length) > 0
+      - (local_env_content.content | b64decode | regex_search('(?m)^FORGEJO_ADMIN_EMAIL=[^\\r\\n]+') | default('') | trim | length) > 0
     fail_msg: "ACME_EMAIL, HEADSCALE_DOMAIN, HEADSCALE_DNS_DOMAIN, FORGEJO_DOMAIN, POSTGRES_DB, POSTGRES_USER and FORGEJO_ADMIN_EMAIL must be set in .env."
